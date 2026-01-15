@@ -1,0 +1,6 @@
+GeoIP.conf
+GeoLite2-City.mmdb
+GeoLite2-Country.mmdb
+GeoLite2-ASN.mmdb
+*.exe
+node_modules/
